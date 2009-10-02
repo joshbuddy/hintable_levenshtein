@@ -1,27 +1,62 @@
 class HintableLevenshtein
+  
+  autoload :Event,   File.join(File.dirname(__FILE__), 'hintable_levenshtein', 'event')
+  autoload :RuleSet, File.join(File.dirname(__FILE__), 'hintable_levenshtein', 'rule_set')
+  
+  def initialize(new_rule_set = nil, &block)
+    @rule_set = []
 
-  def initialize(rule_set = nil)
-
-    @rule_set = if rule_set
-      rule_set
-    else
-      [
-        RuleSet.new(1, Rule.delete),
-        RuleSet.new(1, Rule.insert),
-        RuleSet.new(1, Rule.substitute)
-      ]
+    instance_eval(&block) if block
+    
+    if new_rule_set
+      rule_set.concat(new_rule_set)
     end
     
-    @rule_set_sizes = @rule_set.collect{|r| r.rules.size}.uniq.sort.reverse
-    @largest_rule_size = @rule_set_sizes.first
+    if rule_set.empty?
+      rule_set << RuleSet.new(1, Rule.delete)
+      rule_set << RuleSet.new(1, Rule.insert)
+      rule_set << RuleSet.new(1, Rule.substitute)
+    end
   end
   
+  def rule_set_sizes
+    @rule_set_sizes ||= rule_set.collect{|r| r.rules.size}.uniq.sort.reverse
+  end
+
+  def largest_rule_size
+    rule_set_sizes.first
+  end
+  
+  def delete(score, match)
+    rule_set << RuleSet.new(score, Rule.delete(match))
+  end
+  
+  def insert(score, match)
+    rule_set << RuleSet.new(score, Rule.insert(match))
+  end
+  
+  def substitute(score, match)
+    rule_set << RuleSet.new(score, Rule.substitute(match))
+  end
+  
+  Position = Struct.new(:x, :y)
+  
   def distance(s, t)
+    matrix = levenshtein_matrix(s, t)
+    steps = calculate_steps(s, t, matrix)
+    calculate_score(steps)
+  end
+  
+  private
+  
+  attr_reader :rule_set
+  
+  def levenshtein_matrix(s, t)
     d = Array.new(s.size + 1) {|i| Array.new(t.size + 1)}
     
     (0..s.size).each do |m|
       (0..t.size).each do |n|
-        if m*n == 0
+        if m * n == 0
           d[m][n] = m + n
         else
           d[m][n] = [
@@ -33,44 +68,50 @@ class HintableLevenshtein
       end
     end
     
-    pos = [s.size, t.size]
-    val = d[pos.first][pos.last]
+    d
+  end
+  
+  def calculate_steps(s, t, matrix)
+    position = Position.new(s.size, t.size)
+    value = matrix[position.x][position.y]
     steps = []
-    while d[pos.first][pos.last] != 0
-      previous_pos = pos.clone
-      if pos.first == 0
-        pos = [pos.first, pos.last - 1]
-      elsif pos.last == 0
-        pos = [pos.first - 1, pos.last]
+    while matrix[position.x][position.y] != 0
+      previous_position = position.dup
+      if position.x == 0
+        previous.y -= 1
+      elsif position.y == 0
+        previous.x -= 1
       else
-        min = [d[pos.first-1][pos.last], d[pos.first][pos.last-1], d[pos.first-1][pos.last-1]].min
-        if (min == d[pos.first-1][pos.last-1])
-          pos = [pos.first - 1, pos.last - 1]
-        elsif min == d[pos.first][pos.last-1]
-          pos = [pos.first, pos.last - 1]
-        else
-          pos = [pos.first - 1, pos.last]
+        possible_values = [matrix[position.x - 1][position.y], matrix[position.x][position.y - 1], matrix[position.x - 1][position.y - 1]]
+        case possible_values.min
+        when possible_values[2]
+          position.x -= 1
+          position.y -= 1
+        when possible_values[1]
+          position.y -= 1
+        when possible_values[0]
+          position.x -= 1
         end
       end
+
+      next unless value != matrix[position.x][position.y]
       
-      if (val != d[pos.first][pos.last])
-        val = d[pos.first][pos.last]
-        if previous_pos.first == (pos.first + 1) && previous_pos.last == (pos.last + 1)
-          steps << Event.new(:substitute, s[pos.first] => t[pos.last])
-        elsif previous_pos.first == (pos.first + 1)
-          steps << Event.new(:delete, s[pos.first].chr)
-        else
-          steps << Event.new(:insert, t[pos.last].chr)
-        end
+      value = matrix[position.x][position.y]
+      steps << if previous_position.x == position.x + 1 && previous_position.y == position.y + 1
+        Event.new(:substitute, s[position.x] => t[position.y])
+      elsif previous_position.x == (position.x + 1)
+        Event.new(:delete, s[position.x].chr)
+      else
+        Event.new(:insert, t[position.y].chr)
       end
     end
-    
-    steps.reverse!
-    
+    steps
+  end
+  
+  def calculate_score(steps)
     score = 0.0
-    
-    @rule_set_sizes.each do |set_size|
-      @rule_set.select{|r| r.rules.size == set_size}.each do |rule|
+    rule_set_sizes.each do |set_size|
+      rule_set.select{|r| r.rules.size == set_size}.each do |rule|
         (0..(steps.size - set_size)).each do |offset|
           analyzed_set = steps[offset..(offset + set_size - 1)]
           unless analyzed_set.any?{|s| s.nil?}
@@ -85,99 +126,4 @@ class HintableLevenshtein
     score
   end
   
-  class Event
-    attr_reader :type, :chr, :from, :to
-    def initialize(type, chr = nil)
-      @type = type
-      case type
-      when :substitute
-        unless chr.nil?
-          @from = chr.keys.first
-          @from = @from.chr unless @from.is_a?(String)
-          @to = chr.values.first
-          @to = @to.chr unless @to.is_a?(String)
-        else
-          @from = @to = nil
-        end
-      else
-        @chr = chr.is_a?(String) ? chr : chr.chr
-      end
-    end
-    
-    def to_s
-      if @from
-        "#{@type} -> #{@from}..#{@to}"
-      else
-        "#{@type} -> #{@chr}"
-      end
-    end
-  end
-  
-  class RuleSet
-    include Comparable
-    attr_reader :rules, :score
-    def initialize(score, *rules)
-      @rules = rules
-      @score = score
-    end
-    
-    def to_s
-      "#{score} -> #{rules.collect{|r| r.to_s} * ', '}"
-    end
-    
-    def match?(events)
-      return if events.size != rules.size
-      events.each_with_index do |e, idx|
-        return unless rules[idx].match?(e)
-      end
-      true
-    end
-  end
-  
-  class Rule
-    def self.delete(matcher = nil)
-      new(:delete, matcher)
-    end
-      
-    def self.insert(matcher = nil)
-      new(:insert, matcher)
-    end
-    
-    def self.substitute(matcher = {})
-      new(:substitute, matcher)
-    end
-    
-    attr_reader :type, :matcher
-    
-    def match?(event)
-      if event.type == type
-        case type
-        when :delete, :insert
-          ret = case matcher
-          when nil
-            true
-          when String
-            !matcher.index(event.chr).nil?
-          when Array
-            matcher.include?(event.chr)
-          else
-            matcher === event.chr
-          end
-        when :substitute
-          matcher.empty? || matcher[event.from] == event.to || matcher[event.to] == event.from
-        end
-      end
-    end
-    
-    def to_s
-      "#{type} #{matcher.inspect}"
-    end
-
-    private
-    def initialize(type, matcher)
-      @type = type
-      @matcher = matcher
-    end
-  end  
-    
 end
