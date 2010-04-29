@@ -1,7 +1,7 @@
 require 'lib/hintable_levenshtein'
 
 describe HintableLevenshtein do
-  it "should do this thing" do
+  it "should calculate example 1" do
     english_rules = [
       HintableLevenshtein::RuleSet.new(0.3, HintableLevenshtein::Rule.insert(/[\.,!]/)),
       HintableLevenshtein::RuleSet.new(0.3, HintableLevenshtein::Rule.delete(/[\.,!]/)),
@@ -27,4 +27,11 @@ describe HintableLevenshtein do
     HintableLevenshtein.new(english_rules).distance(a, b).should == 7.15
     
   end
+  
+  it "should calculate example 2" do
+    p = "Recusandae quasi dolore corporis"
+    p2 = "... quasi dolore corporis"
+    HintableLevenshtein.new.distance(p,p2).should == 10.0
+  end
+  
 end

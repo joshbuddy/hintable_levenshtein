@@ -78,9 +78,9 @@ class HintableLevenshtein
     while matrix[position.x][position.y] != 0
       previous_position = position.dup
       if position.x == 0
-        previous.y -= 1
+        position.y -= 1
       elsif position.y == 0
-        previous.x -= 1
+        position.x -= 1
       else
         possible_values = [matrix[position.x - 1][position.y], matrix[position.x][position.y - 1], matrix[position.x - 1][position.y - 1]]
         case possible_values.min
